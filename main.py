@@ -1,4 +1,3 @@
-
 import logging
 import asyncio
 import json
@@ -26,7 +25,7 @@ scheduler = AsyncIOScheduler()
 
 # --- Game Constants ---
 TEAM_STARTING_POINTS = 1000
-BLACKMAIL_STEAL_AMOUNT = 40
+BLACKMAIL_STEAL_AMOUNT = 100
 # NUM_TRAITORS is now dynamic, this is a fallback/max.
 DEFAULT_NUM_TRAITORS = 3
 
@@ -518,6 +517,30 @@ async def schedule_vote_command(update: Update, context: ContextTypes.DEFAULT_TY
     except (ValueError, TypeError):
         await update.message.reply_text(r"Invalid time format\. Please use `HH:MM`\.")
 
+async def startnight_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows the admin to manually start the night phase, skipping the cooldown."""
+    chat_id = update.message.chat_id
+    user_id = update.message.from_user.id
+    game_state = get_game_state(chat_id)
+
+    if not game_state or game_state["phase"] != "DAY":
+        await update.message.reply_text(r"This command can only be used during the Day phase after a vote\.")
+        return
+
+    if user_id != game_state.get("admin"):
+        await update.message.reply_text(r"Only the game admin can start the night\.")
+        return
+    
+    # Cancel any pending night start job
+    try:
+        scheduler.remove_job(f"night_start_{chat_id}")
+        await update.message.reply_text(r"Overriding the 12-hour cooldown and starting the night now\.")
+    except JobLookupError:
+        pass # No job was scheduled, which is fine.
+
+    await start_night_phase(context, chat_id)
+
+
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Allows an admin to remove a player from the game."""
     chat_id = update.message.chat_id
@@ -767,6 +790,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             game_state["murdered_last_night"] = target_player['id']
             await query.edit_message_text(text=rf"Action confirmed\. You have chosen to murder {escape_markdown(target_player['name'])}\. The result will be revealed at the start of the next day\.", parse_mode=ParseMode.MARKDOWN_V2)
+            
+            if await check_for_points_win(context, chat_id): return
+            if await check_for_elimination_win(context, chat_id): return
 
         elif action_type == "recruit":
             await query.edit_message_text(text=rf"You have offered recruitment to {escape_markdown(target_player['name'])}\. They will now receive the offer\.", parse_mode=ParseMode.MARKDOWN_V2)
@@ -851,6 +877,7 @@ def main():
     application.add_handler(CommandHandler("begin", begin_command))
     application.add_handler(CommandHandler("startvote", startvote_command))
     application.add_handler(CommandHandler("schedule_vote", schedule_vote_command))
+    application.add_handler(CommandHandler("startnight", startnight_command))
     application.add_handler(CommandHandler("remove", remove_command))
     application.add_handler(CommandHandler("endgame", endgame_command))
 
@@ -860,3 +887,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
